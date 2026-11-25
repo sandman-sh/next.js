@@ -134,10 +134,10 @@ import {
   traceLocalSpan,
 } from '../lib/trace/local-span-recorder'
 import {
-  importRequestInsightSpans,
   isRequestInsightsEnabled,
   startRequestInsight,
 } from '../lib/trace/request-insights'
+import { importRequestInsightSpans } from '../lib/trace/import-request-insight-spans'
 import { FlightRenderResult } from './flight-render-result'
 import {
   createReactServerErrorHandler,
@@ -11479,7 +11479,7 @@ function isBypassingCachesInDev(
 
 function WarnForBypassCachesInDev({ route }: { route: string }) {
   warnOnce(
-    `Route ${route} is rendering with server caches disabled. For this navigation, Component Metadata in React DevTools will not accurately reflect what is statically prerenderable and runtime prefetchable. See more info here: https://nextjs.org/docs/messages/cache-bypass-in-dev`
+    `Route ${route} is rendering with server caches disabled. For this request, Next.js skips Cache Components and instant navigation validation, so errors for this route may not be reported, including ones that are only reported in development. Component Metadata in React DevTools will not accurately reflect what is statically prerenderable and runtime prefetchable. See more info here: https://nextjs.org/docs/messages/cache-bypass-in-dev`
   )
   return null
 }
