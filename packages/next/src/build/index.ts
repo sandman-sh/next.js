@@ -2397,7 +2397,11 @@ export default async function build(
           appPathRoutes
         )
 
-        if (nativeAppPaths.size > 0) {
+        // See checkNativeRouteStartup for why, and for the opt-out.
+        if (
+          nativeAppPaths.size > 0 &&
+          config.experimental.goRoutesStartupCheck !== false
+        ) {
           await nextBuildSpan
             .traceChild('check-native-route-startup')
             .traceAsyncFn(() =>
