@@ -691,6 +691,49 @@ describe('card sets for all error families', () => {
     ])
   })
 
+  it.each<[SyncIOApiType, string, string]>([
+    ['time', 'Date.now()', 'const [time] = useState(() => Date.now())'],
+    ['random', 'Math.random()', 'const [id] = useState(() => Math.random())'],
+    [
+      'crypto',
+      'crypto.randomUUID()',
+      'const [id] = useState(() => crypto.randomUUID())',
+    ],
+  ])(
+    'distinguishes server and client sync IO fixes for %s',
+    (type, cause, read) => {
+      const serverCards = getCards('sync-io', 'runtime', cause)
+      expect(serverCards[0].snippets).toContainEqual({
+        text: 'await io()',
+        highlight: true,
+      })
+      expect(
+        serverCards.find((card) => card.group === 'client')?.snippets
+      ).toEqual([
+        { text: '"use client"', highlight: true },
+        { text: 'use(browser())', highlight: true },
+        { text: read },
+      ])
+
+      for (const factory of [createSyncIOError, createSyncIORuntimeError]) {
+        const message = factory(ROUTE, cause, type).message
+        expect(message).toContain('`await io()` before this read')
+        expect(message).toContain(
+          '`use(browser())` inside a parent `<Suspense>`'
+        )
+      }
+
+      const clientCards = getCards('sync-io-client', 'runtime', cause)
+      expect(clientCards[0]).toMatchObject({
+        id: 'wrap-in-or-move-into-suspense',
+        group: 'stream',
+      })
+      expect(createSyncIOClientError(ROUTE, cause, type).message).toContain(
+        '[stream] Wrap the Client Component in `<Suspense fallback={...}>`'
+      )
+    }
+  )
+
   it('sync-io math', () => {
     expect(
       getCards('sync-io', 'runtime', 'Math.random()').map((card) => card.id)

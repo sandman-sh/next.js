@@ -34,7 +34,7 @@ Other unpredictable APIs ([`Date.now()`](https://developer.mozilla.org/en-US/doc
     title="Generate on every request"
     href="#generate-on-every-request"
     snippets={[
-      { text: 'await connection()', highlight: true },
+      { text: 'await io()', highlight: true },
       { text: 'const id = Math.random()' },
       { text: 'return <Item id={id} />' },
     ]}
@@ -55,8 +55,8 @@ Other unpredictable APIs ([`Date.now()`](https://developer.mozilla.org/en-US/doc
     href="#render-on-the-client"
     snippets={[
       { text: '"use client"', highlight: true },
-      { text: '// runs in the browser' },
-      { text: 'const id = Math.random()' },
+      { text: 'use(browser())', highlight: true },
+      { text: 'const [id] = useState(() => Math.random())' },
     ]}
   />
 </FixCardGrid>
@@ -192,9 +192,34 @@ To keep the page prerendered, use a profile with a longer revalidate window such
 
 ## Render on the client
 
-Choose this fix when the random value belongs to the client experience. A canvas seed for a confetti animation, a random color for an avatar placeholder, a UI nonce that only matters in the browser. Read the value after mount or in an event handler. [Client Components also render on the server](/docs/app/getting-started/server-and-client-components#on-the-server).
+Choose this fix when the random value belongs to the client experience. A canvas seed for a confetti animation, a random color for an avatar placeholder, a UI nonce that only matters in the browser. Read the value only in the browser, after mount, or in an event handler. [Client Components also render on the server](/docs/app/getting-started/server-and-client-components#on-the-server).
 
 ### Patterns
+
+#### Create a browser-only random value
+
+Call [`use(browser())`](https://react.dev/reference/react-dom/browser) before generating the value. A parent `<Suspense>` boundary supplies the server fallback. The state initializer runs in the browser and keeps the value stable across re-renders.
+
+```jsx filename="app/random-label.js"
+'use client'
+
+import { Suspense, use, useState } from 'react'
+import { browser } from 'react-dom'
+
+export function RandomLabel() {
+  return (
+    <Suspense fallback={<p>Loading label…</p>}>
+      <RandomValue />
+    </Suspense>
+  )
+}
+
+function RandomValue() {
+  use(browser())
+  const [id] = useState(() => Math.random())
+  return <p>Random label: {id.toString(36).slice(2)}</p>
+}
+```
 
 #### Compute the value inside `useEffect`
 

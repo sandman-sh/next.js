@@ -477,7 +477,7 @@ const syncMathCards: FixCard[] = [
     group: 'dynamic',
     link: 'https://nextjs.org/docs/messages/blocking-prerender-random#generate-on-every-request',
     snippets: [
-      { text: 'await connection()', highlight: true },
+      { text: 'await io()', highlight: true },
       { text: 'const id = Math.random()' },
       { text: 'return <Item id={id} />' },
     ],
@@ -502,8 +502,8 @@ const syncMathCards: FixCard[] = [
     link: 'https://nextjs.org/docs/messages/blocking-prerender-random#render-on-the-client',
     snippets: [
       { text: '"use client"', highlight: true },
-      { text: '// runs in the browser' },
-      { text: 'const id = Math.random()' },
+      { text: 'use(browser())', highlight: true },
+      { text: 'const [id] = useState(() => Math.random())' },
     ],
     copyable: true,
   },
@@ -516,7 +516,7 @@ const syncDateCards: FixCard[] = [
     group: 'dynamic',
     link: 'https://nextjs.org/docs/messages/blocking-prerender-current-time#generate-on-every-request',
     snippets: [
-      { text: 'await connection()', highlight: true },
+      { text: 'await io()', highlight: true },
       { text: 'const t = Date.now()' },
       { text: 'return <Banner time={t} />' },
     ],
@@ -541,8 +541,8 @@ const syncDateCards: FixCard[] = [
     link: 'https://nextjs.org/docs/messages/blocking-prerender-current-time#render-on-the-client',
     snippets: [
       { text: '"use client"', highlight: true },
-      { text: '// runs in the browser' },
-      { text: 'const t = Date.now()' },
+      { text: 'use(browser())', highlight: true },
+      { text: 'const [time] = useState(() => Date.now())' },
     ],
     copyable: true,
   },
@@ -567,7 +567,7 @@ const syncCryptoCards: FixCard[] = [
     group: 'dynamic',
     link: 'https://nextjs.org/docs/messages/blocking-prerender-crypto#generate-on-every-request',
     snippets: [
-      { text: 'await connection()', highlight: true },
+      { text: 'await io()', highlight: true },
       { text: 'const id = crypto.randomUUID()' },
       { text: 'return <Token id={id} />' },
     ],
@@ -592,8 +592,8 @@ const syncCryptoCards: FixCard[] = [
     link: 'https://nextjs.org/docs/messages/blocking-prerender-crypto#render-on-the-client',
     snippets: [
       { text: '"use client"', highlight: true },
-      { text: '// runs in the browser' },
-      { text: 'const id = crypto.randomUUID()' },
+      { text: 'use(browser())', highlight: true },
+      { text: 'const [id] = useState(() => crypto.randomUUID())' },
     ],
     copyable: true,
   },

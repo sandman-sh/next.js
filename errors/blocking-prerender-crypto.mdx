@@ -34,7 +34,7 @@ Other unpredictable APIs ([`Math.random()`](https://developer.mozilla.org/en-US/
     title="Generate on every request"
     href="#generate-on-every-request"
     snippets={[
-      { text: 'await connection()', highlight: true },
+      { text: 'await io()', highlight: true },
       { text: 'const id = crypto.randomUUID()' },
       { text: 'return <Token id={id} />' },
     ]}
@@ -55,8 +55,8 @@ Other unpredictable APIs ([`Math.random()`](https://developer.mozilla.org/en-US/
     href="#render-on-the-client"
     snippets={[
       { text: '"use client"', highlight: true },
-      { text: '// runs in the browser' },
-      { text: 'const id = crypto.randomUUID()' },
+      { text: 'use(browser())', highlight: true },
+      { text: 'const [id] = useState(() => crypto.randomUUID())' },
     ]}
   />
 </FixCardGrid>
@@ -209,9 +209,34 @@ To keep the page prerendered, use a profile with a longer revalidate window such
 
 ## Render on the client
 
-Choose this fix when the generated value belongs to the client experience. A client-only correlation ID for telemetry, a draft-state key in [`localStorage`](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage), a UI nonce for a confirmation modal. Read the value after mount or in an event handler. [Client Components also render on the server](/docs/app/getting-started/server-and-client-components#on-the-server).
+Choose this fix when the generated value belongs to the client experience. A client-only correlation ID for telemetry, a draft-state key in [`localStorage`](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage), a UI nonce for a confirmation modal. Read the value only in the browser, after mount, or in an event handler. [Client Components also render on the server](/docs/app/getting-started/server-and-client-components#on-the-server).
 
 ### Patterns
+
+#### Create a browser-only identifier
+
+Call [`use(browser())`](https://react.dev/reference/react-dom/browser) before generating the identifier. A parent `<Suspense>` boundary supplies the server fallback. The state initializer runs in the browser and keeps the identifier stable across re-renders.
+
+```jsx filename="app/browser-draft-key.js"
+'use client'
+
+import { Suspense, use, useState } from 'react'
+import { browser } from 'react-dom'
+
+export function DraftKey() {
+  return (
+    <Suspense fallback={null}>
+      <DraftValue />
+    </Suspense>
+  )
+}
+
+function DraftValue() {
+  use(browser())
+  const [id] = useState(() => crypto.randomUUID())
+  return <input type="hidden" name="draft" value={id} />
+}
+```
 
 #### Move the component to the client
 
