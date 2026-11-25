@@ -1336,6 +1336,14 @@ async function startWatcher(
         ])
       )
 
+      // The scan can await while Turbopack updates proxy.go's matchers. Preserve
+      // the latest failure or recovery state instead of committing its snapshot.
+      if (
+        middlewareEntry?.runtime === 'go' &&
+        serverFields.middleware?.runtime === 'go'
+      ) {
+        middlewareEntry.matchers = serverFields.middleware.matchers
+      }
       // TODO: pass this to fsChecker/next-dev-server?
       serverFields.middleware = middlewareEntry
       // A removed or replaced proxy.go takes its Config error with it.
@@ -1721,13 +1729,24 @@ export async function setupDevBundler(opts: SetupOpts) {
   )
 
   // Track build features for dev server here:
-  opts.telemetry.record({
-    eventName: EVENT_BUILD_FEATURE_USAGE,
-    payload: {
-      featureName: 'turbopackFileSystemCache',
-      invocationCount: isFileSystemCacheEnabledForDev(opts.nextConfig) ? 1 : 0,
+  opts.telemetry.record([
+    {
+      eventName: EVENT_BUILD_FEATURE_USAGE,
+      payload: {
+        featureName: 'turbopackFileSystemCache',
+        invocationCount: isFileSystemCacheEnabledForDev(opts.nextConfig)
+          ? 1
+          : 0,
+      },
     },
-  })
+    {
+      eventName: EVENT_BUILD_FEATURE_USAGE,
+      payload: {
+        featureName: 'experimental/goRoutes',
+        invocationCount: opts.nextConfig.experimental.goRoutes ? 1 : 0,
+      },
+    },
+  ])
 
   return result
 }
