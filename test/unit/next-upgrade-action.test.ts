@@ -123,6 +123,47 @@ describe('scheduled Next.js upgrade workflow', () => {
     // Consumer runs use the published package and never build the monorepo.
     expect(serialized).not.toMatch(/pnpm|corepack|turbo|taskr/)
   })
+
+  it('publishes with its own token in a job that never installs Next.js', () => {
+    const { on, jobs } = workflow()
+    expect(jobs.publish).toMatchObject({
+      needs: 'prepare',
+      permissions: { contents: 'read' },
+      steps: expect.arrayContaining([
+        checkout,
+        expect.objectContaining({
+          run: 'node install-next.mjs',
+          env: expect.objectContaining({ NEXT_UPGRADE_DEPS_ONLY: 'true' }),
+        }),
+        // Publication checks the index against the same approved inputs.
+        expect.objectContaining({
+          env: expect.objectContaining({
+            ...approvedApp,
+            GH_TOKEN: workflowExpression('secrets.publish-token'),
+          }),
+        }),
+      ]),
+    })
+    expect(JSON.stringify(jobs.publish)).not.toContain('PREVIEW_PACKAGE')
+    expect(JSON.stringify(jobs).match(/secrets\.publish-token/g)).toHaveLength(
+      2
+    )
+    expect(JSON.stringify(jobs.prepare)).not.toContain('publish-token')
+    // A run without the publication token stops before preparation.
+    expect(on.workflow_call.secrets['publish-token']).toEqual({
+      required: true,
+    })
+    expect(jobs.prepare.needs).toBe('preflight')
+    const { preflight } = jobs
+    expect(preflight.permissions).toEqual({})
+    expect(preflight.steps).toHaveLength(1)
+    expect(preflight.steps![0].env).toEqual({
+      PUBLISH_TOKEN_PROVIDED: workflowExpression("secrets.publish-token != ''"),
+    })
+    expect(preflight.steps![0].run).toMatch(
+      /if \[ "\$PUBLISH_TOKEN_PROVIDED" != true \]; then\n[^\n]+\n\s+exit 1\n/
+    )
+  })
 })
 
 // A stand-in sudo that records each call, runs commands as the agent user
@@ -506,8 +547,31 @@ describe('scheduled upgrade candidates', () => {
   )
 
   describe('a ready assessment', () => {
+    const url = 'https://github.com/example/consumer/pull/2'
     let directory: string
     let prepared: ReturnType<typeof prepare>
+    let remote: string
+    let publication: {
+      rejectedPath: { outcomes: unknown[] }
+      otherPolicy: { outcomes: { status: string; failureStage?: string }[] }
+      attempts: {
+        outcomes: {
+          paths: string[]
+          status: string
+          url?: string
+          failureStage?: string
+        }[]
+      }[]
+      pulls: {
+        title: string
+        body: string
+        base: { ref: string }
+        head: { ref: string; sha: string }
+        draft?: boolean
+      }[]
+      requests: { method: string; endpoint: string; paginate: boolean }[]
+    }
+
     beforeAll(() => {
       directory = scratchDirectory()
       prepared = prepare({
@@ -515,6 +579,53 @@ describe('scheduled upgrade candidates', () => {
         agent: 'upgrade',
         agentUser: 'next-upgrade-agent',
       })
+      remote = join(directory, 'remote.git')
+      git(directory, 'init', '--bare', '--initial-branch=main', remote)
+      git(prepared.root, 'push', remote, 'HEAD:refs/heads/main')
+      const publisher = `
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+const { modulePath, url, ...input } = JSON.parse(process.argv[1])
+const { publishUpgradeCandidate } = await import(pathToFileURL(modulePath).href)
+const pulls = []
+const requests = []
+const github = async (method, endpoint, body, options) => {
+  requests.push({ method, endpoint: endpoint.split('?')[0], paginate: options?.paginate ?? false })
+  if (method === 'GET' && endpoint.startsWith('/repos/example/consumer/pulls?')) {
+    return pulls
+  }
+  if (method === 'POST' && endpoint === '/repos/example/consumer/pulls') {
+    const sha = execFileSync('git', ['rev-parse', 'refs/heads/' + body.head], { cwd: input.gitRemote, encoding: 'utf8' }).trim()
+    const pull = { ...body, html_url: url, head: { ref: body.head, sha, repo: { full_name: 'example/consumer' } }, base: { ref: body.base } }
+    pulls.push(pull)
+    return pull
+  }
+  throw new Error('Unexpected GitHub request ' + method + ' ' + endpoint)
+}
+// The index must match the inputs the workflow approved.
+const rejectedPath = await publishUpgradeCandidate({ ...input, appPath: 'apps/other', github })
+const otherPolicy = await publishUpgradeCandidate({ ...input, policy: 'security', github })
+const attempts = []
+for (let run = 0; run < 2; run++) {
+  attempts.push(await publishUpgradeCandidate({ ...input, github }))
+}
+console.log(JSON.stringify({ rejectedPath, otherPolicy, attempts, pulls, requests }))
+`
+      publication = runScript(
+        publisher,
+        {
+          modulePath: join(actionRoot, 'publish-upgrade.mjs'),
+          root: prepared.root,
+          artifactDirectory: prepared.artifactDirectory,
+          appPath,
+          policy: 'latest',
+          repository: 'example/consumer',
+          baseBranch: 'main',
+          gitRemote: remote,
+          url,
+        },
+        prepared.root
+      )
     }, prepareTimeout)
 
     it('assesses the installed app with the pinned CLI', () => {
@@ -588,6 +699,75 @@ describe('scheduled upgrade candidates', () => {
       }
       // Preparation never touches the consumer checkout.
       expect(git(prepared.root, 'status', '--porcelain')).toBe('')
+    })
+
+    it('rejects an index for another app or policy', () => {
+      // The outcome names the approved app, which has no matching candidate.
+      expect(publication.rejectedPath.outcomes).toEqual([
+        { paths: ['apps/other'], status: 'failed', failureStage: 'publishing' },
+      ])
+      expect(publication.otherPolicy.outcomes).toEqual([
+        { paths: [appPath], status: 'failed', failureStage: 'publishing' },
+      ])
+    })
+
+    it('opens one pull request and reuses it on the next run', () => {
+      const [{ id }] = prepared.index.candidates
+      const marker = `<!-- next-upgrade-candidate:${id} -->`
+      expect(publication.attempts.map(({ outcomes }) => outcomes)).toEqual([
+        [{ paths: [appPath], status: 'new_pull_request', url }],
+        [{ paths: [appPath], status: 'existing_pull_request', url }],
+      ])
+      expect(publication.pulls).toHaveLength(1)
+      const [pull] = publication.pulls
+      expect(pull).toMatchObject({
+        title: `Upgrade Next.js to ${targetVersion}`,
+        base: { ref: 'main' },
+        head: {
+          ref: expect.stringMatching(
+            new RegExp(`^next-upgrade/${id}-[0-9a-f]{12}$`)
+          ),
+        },
+      })
+      // The upgrade opens as a regular pull request, not a draft.
+      expect(pull).not.toHaveProperty('draft')
+      const lines = pull.body.split('\n')
+      // The candidate marker, then the one a local `next upgrade --agent`
+      // checks for duplicates.
+      expect(lines.slice(0, 2)).toEqual([
+        marker,
+        `<!-- next-upgrade: latest; path=${JSON.stringify(appPath)} -->`,
+      ])
+      expect(lines).toContain(`    ${appPath} (latest)`)
+      // Pull requests are listed across every page.
+      expect(publication.requests).toContainEqual({
+        method: 'GET',
+        endpoint: '/repos/example/consumer/pulls',
+        paginate: true,
+      })
+      expect(
+        publication.requests.filter(({ method }) => method === 'POST')
+      ).toHaveLength(1)
+
+      // The branch holds one commit on the base with the app's changes.
+      const branch = pull.head.ref
+      expect(
+        git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads/')
+          .split('\n')
+          .sort()
+      ).toEqual(['refs/heads/main', `refs/heads/${branch}`])
+      expect(git(remote, 'rev-parse', branch)).toBe(pull.head.sha)
+      expect(git(remote, 'rev-list', '--count', `main..${branch}`)).toBe('1')
+      expect(git(remote, 'log', '-1', '--format=%an%n%B', branch)).toBe(
+        `github-actions[bot]\nUpgrade Next.js to ${targetVersion}\n\n${marker}`
+      )
+      expect(
+        git(remote, 'diff', '--name-only', 'main', branch).split('\n')
+      ).toEqual([
+        'apps/site/package-lock.json',
+        'apps/site/package.json',
+        'apps/site/pages/index.js',
+      ])
     })
   })
 
