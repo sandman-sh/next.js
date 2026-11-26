@@ -248,6 +248,12 @@ export async function mergeMetadata(
   for (const key_ in metadata) {
     const key = key_ as keyof Metadata
 
+    // Explicit `undefined` behaves like an absent key so parent values
+    // survive (e.g. `description: product?.subtitle` with no subtitle).
+    // Without this, `for...in` still visits the key and resolvers like
+    // `metadata[key] ?? null` overwrite the parent with null.
+    if (metadata[key] === undefined) continue
+
     switch (key) {
       case 'title': {
         newResolvedMetadata.title = resolveTitle(

@@ -96,6 +96,19 @@ describe('accumulateMetadata', () => {
     })
   })
 
+  describe('description', () => {
+    it('should fall back to parent description when child sets undefined explicitly', async () => {
+      const metadataItems: MetadataItems = [
+        [{ description: 'parent' }, null],
+        [{ description: undefined }, null],
+      ]
+      const metadata = await accumulateMetadata(metadataItems)
+      expect(metadata).toMatchObject({
+        description: 'parent',
+      })
+    })
+  })
+
   describe('icon', () => {
     it('should resolve icons.icon correctly', async () => {
       // array icons
