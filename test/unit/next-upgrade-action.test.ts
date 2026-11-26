@@ -164,6 +164,42 @@ describe('scheduled Next.js upgrade workflow', () => {
       /if \[ "\$PUBLISH_TOKEN_PROVIDED" != true \]; then\n[^\n]+\n\s+exit 1\n/
     )
   })
+
+  it('pins the reusable workflow in the setup template', () => {
+    const template = readYaml(join(actionRoot, 'workflow.template.yml'))
+    expect(template).toMatchObject({
+      jobs: {
+        upgrade: {
+          uses: 'vercel/next.js/.github/workflows/next-upgrade.yml@__NEXT_UPGRADE_WORKFLOW_SHA__',
+          // The job token only reads; the publication token opens the pull request.
+          permissions: { contents: 'read' },
+          with: {
+            'app-path': '__NEXT_UPGRADE_APP_PATH__',
+            policy: '__NEXT_UPGRADE_POLICY__',
+            model: '__NEXT_UPGRADE_MODEL__',
+            effort: '__NEXT_UPGRADE_EFFORT__',
+          },
+          secrets: {
+            'agent-credential': workflowExpression(
+              'secrets.NEXT_UPGRADE_AGENT_CREDENTIAL'
+            ),
+            'publish-token': workflowExpression(
+              'secrets.NEXT_UPGRADE_PUBLISH_TOKEN'
+            ),
+          },
+        },
+      },
+    })
+    // Setup never writes the test-only input.
+    expect(Object.keys(template.jobs.upgrade.with!).sort()).toEqual([
+      'agent-auth',
+      'app-path',
+      'effort',
+      'model',
+      'policy',
+      'telemetry-disabled',
+    ])
+  })
 })
 
 // A stand-in sudo that records each call, runs commands as the agent user

@@ -1,6 +1,6 @@
 # Scheduled Next.js upgrades
 
-The reusable workflow `.github/workflows/next-upgrade.yml` upgrades one app on a schedule or when it is run by hand, and opens a pull request with the upgrade. Every job checks out only these workflow scripts at the workflow's own commit, and preparation installs the published `next` package of exactly the version in `packages/next/package.json` from npm. Consumer runs never install or build the monorepo.
+`next upgrade --ci` opens a setup pull request containing the weekly and manual caller workflow. Setup resolves the `vercel/next.js` release tag that matches the installed `next` version, reads the template and the reusable workflow at that commit, and pins the caller to its full SHA. The reusable workflow `.github/workflows/next-upgrade.yml` upgrades one app on a schedule or when it is run by hand, and opens a pull request with the upgrade. Every job checks out only these workflow scripts at the workflow's own commit, and preparation installs the published `next` package of exactly the version in `packages/next/package.json` from npm. Consumer runs never install or build the monorepo.
 
 The caller passes the repository-relative `app-path` and the `security` or `latest` `policy`. This version supports one app that uses npm, with a `package-lock.json` next to its `package.json`.
 
@@ -8,12 +8,13 @@ Choose `agent-auth` from `codex-openai-api-key` (Codex with an OpenAI API key), 
 
 Preparation installs the app's dependencies with scripts off, then runs the pinned `next upgrade --agent=<policy>` in scheduled mode. The CLI assesses the app and, when an upgrade is ready, writes the same guides and prompt as a local `next upgrade --agent`. The agent upgrades and verifies the app in an isolated checkout. Preparation packages the agent's changes as a patch from a runner-owned snapshot. It rejects an empty change, changes under `.github` or `.gitmodules`, symlinks, submodules, new executable files or other mode changes, setuid or setgid files, and patches that contain the agent credential. After the agent starts, this process runs Git and sudo from `/usr/bin` with a fixed `PATH` and no Git templates, because the agent user can write to parts of the hosted runner image. The workflow hands the patch and its index to publication as the `next-upgrade-candidates` artifact.
 
-Publication requires the `publish-token` secret: a fine-grained personal access token with `contents` and `pull-requests` write access. GitHub App installation tokens expire after an hour, so they do not work as a stored secret. A run without the token stops before preparation. The job token only reads, so the caller grants `contents: read`. Publication commits the patch as one signed commit and opens or reuses one pull request for the app.
+Publication requires the `publish-token` secret, passed from `NEXT_UPGRADE_PUBLISH_TOKEN`: a fine-grained personal access token with `contents` and `pull-requests` write access. GitHub App installation tokens expire after an hour, so they do not work as a stored secret. A run without the token stops before preparation. The job token only reads, so the caller grants `contents: read`. Publication commits the patch as one signed commit and opens or reuses one pull request for the app.
 
-The workflow stays on its pinned release. When a newer major version is available, the run reports it as blocked until the pin moves to a release of that major. To opt out of Next.js telemetry, set `telemetry-disabled: true` in the caller's workflow inputs.
+The workflow stays on its pinned release. When a newer major version is available, the run reports it as blocked until the pin moves to a release of that major: update the commit in the workflow file, or delete it and run `next upgrade --ci` again. To opt out of Next.js telemetry, set `telemetry-disabled: true` in the caller's workflow inputs. Setup sets it when the environment already opts out.
 
 Regular verification uses the npm single-app fixture, real local Git, a stand-in agent, and a mock GitHub API. Run:
 
 ```bash
 pnpm exec jest --runInBand test/unit/next-upgrade-hosted-agent.test.ts test/unit/next-upgrade-action.test.ts
+pnpm test-dev-turbo test/e2e/agent-upgrade-ci/agent-upgrade-ci.test.ts
 ```
