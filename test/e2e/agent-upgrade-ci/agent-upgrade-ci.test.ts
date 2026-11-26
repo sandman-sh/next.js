@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -143,6 +144,7 @@ function runSetup({
   tagMissing = false,
   annotatedTag = false,
   nonInteractive = false,
+  agent,
   cwd = directory,
   path = [],
 }: {
@@ -157,6 +159,7 @@ function runSetup({
   tagMissing?: boolean
   annotatedTag?: boolean
   nonInteractive?: boolean
+  agent?: FakeAgent
   cwd?: string
   // PATH entries searched before the stand-in commands.
   path?: string[]
@@ -202,7 +205,7 @@ function runSetup({
         NODE_ENV: 'production',
         NEXT_TELEMETRY_DISABLED: '1',
         // Agent CLIs installed on this machine never reach setup.
-        PATH: [...path, commandPath(directory)].join(delimiter),
+        PATH: [...path, agentPath(directory, agent)].join(delimiter),
         UPGRADE_SETUP_TEST: config,
       },
     }
@@ -216,7 +219,20 @@ function runSetup({
     output: result.stdout + result.stderr,
     requests: entries.filter((entry) => entry.endpoint !== undefined),
     menus: entries.flatMap((entry) => (entry.menu ? [entry.menu] : [])),
+    // The environment each agent CLI started with.
+    agentRuns: readAgentRuns(directory),
   }
+}
+
+type AgentRun = { name: string; env: Record<string, string | undefined> }
+
+function readAgentRuns(directory: string): AgentRun[] {
+  const file = join(directory, 'agent-runs.jsonl')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
 }
 
 const gitPath = (process.env.PATH ?? '')
@@ -224,16 +240,52 @@ const gitPath = (process.env.PATH ?? '')
   .map((directory) => join(directory, 'git'))
   .find((file) => spawnSync(file, ['--version']).status === 0)
 
-// A PATH with Git and the GitHub CLI. Setup runs commands only from outside
-// the checkout, so they sit next to it.
-function commandPath(directory: string) {
+type FakeAgent = {
+  name: 'codex' | 'claude'
+  models: readonly unknown[]
+  // Like pressing Ctrl+C while setup reads the models.
+  interrupt?: boolean
+}
+
+// A PATH with Git and, when given, a stand-in agent CLI that answers model
+// discovery like Codex app-server or Claude stream-json. Setup runs commands
+// only from outside the checkout, so they sit next to it.
+function agentPath(directory: string, agent?: FakeAgent) {
   const bin = `${directory}-bin`
   rmSync(bin, { recursive: true, force: true })
   mkdirSync(bin)
   if (!gitPath) throw new Error('Could not find Git on PATH.')
   symlinkSync(gitPath, join(bin, 'git'))
   // The hook answers for it, but setup only runs commands it finds.
-  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  for (const name of ['gh']) {
+    writeFileSync(join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  }
+  rmSync(join(directory, 'agent-runs.jsonl'), { force: true })
+  if (agent) {
+    const file = join(bin, agent.name)
+    writeFileSync(
+      file,
+      `#!${process.execPath}
+const fs = require('node:fs')
+const readline = require('node:readline')
+const models = ${JSON.stringify(agent.models)}
+// Setup gives the CLI a fresh environment, so the path is written here.
+fs.appendFileSync(${JSON.stringify(join(directory, 'agent-runs.jsonl'))}, JSON.stringify({ name: ${JSON.stringify(agent.name)}, env: process.env }) + '\\n')
+${agent.interrupt ? "process.kill(process.ppid, 'SIGINT')" : ''}
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line)
+  if (message.method === 'initialize') {
+    console.log(JSON.stringify({ id: message.id, result: {} }))
+  } else if (message.method === 'model/list') {
+    console.log(JSON.stringify({ id: message.id, result: { data: models, nextCursor: null } }))
+  } else if (message.type === 'control_request') {
+    console.log(JSON.stringify({ type: 'control_response', response: { request_id: message.request_id, subtype: 'success', response: { models } } }))
+  }
+})
+`
+    )
+    chmodSync(file, 0o755)
+  }
   return bin
 }
 
@@ -242,6 +294,9 @@ const agentMenu = {
   'claude-anthropic-api-key': 'Claude Code with an Anthropic API key',
   'claude-subscription': 'Claude Code with a Claude subscription',
 }
+
+const defaultModelInfo = (name: string) =>
+  `The workflow uses the default model of its ${name} CLI. Install ${name} here to choose another model.`
 
 // Scheduled upgrades support a single app that uses npm.
 function copyApp(target: string) {
@@ -339,7 +394,8 @@ describe('next upgrade --ci', () => {
     // An explicit policy skips the question, and the pull request shows the workflow.
     expect(result.output).not.toContain('Choose the upgrade policy')
     expect(result.output).not.toContain('uses: vercel/next.js')
-    // The workflow keeps the CLI default model.
+    // Without a Codex CLI here, the workflow keeps the CLI default model.
+    expect(result.output).toContain(defaultModelInfo('Codex'))
     expect(result.output).not.toContain('model should run the upgrade')
     expect(result.output).toContain(
       `Open a setup pull request against ${repo} (main)?`
@@ -394,15 +450,16 @@ describe('next upgrade --ci', () => {
     expect(pull.body).not.toHaveProperty('draft')
   })
 
-  it('runs Git and the GitHub CLI from PATH, never from the checkout', () => {
+  it('runs Git, the GitHub CLI, and agent CLIs from PATH, never from the checkout', () => {
     copyApp(directory)
     // Commands planted in the checkout, found first through a relative and
     // an absolute PATH entry, e.g. node_modules/.bin from a package runner.
     const marker = join(`${directory}-bin`, 'planted-ran')
     const planted = join(directory, 'node_modules/.bin')
     mkdirSync(planted, { recursive: true })
-    for (const name of ['git', 'gh']) {
-      const script = `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`
+    for (const name of ['git', 'gh', 'codex', 'claude']) {
+      // A shell builtin, since this PATH has no touch.
+      const script = `#!/bin/sh\n: > ${JSON.stringify(marker)}\nexit 1\n`
       writeFileSync(join(directory, name), script, { mode: 0o755 })
       writeFileSync(join(planted, name), script, { mode: 0o755 })
     }
@@ -473,6 +530,7 @@ describe('next upgrade --ci', () => {
       latest: 'Latest stable release (every new stable release)',
     })
     expect(result.output).toContain(setupUrl)
+    expect(result.output).toContain(defaultModelInfo('Claude Code'))
     expect(load(committedWorkflow(result))).toMatchObject({
       jobs: {
         upgrade: {
@@ -486,6 +544,209 @@ describe('next upgrade --ci', () => {
           },
         },
       },
+    })
+  })
+
+  describe('with an agent CLI on PATH', () => {
+    const codex = 'codex-openai-api-key'
+    const claude = 'claude-anthropic-api-key'
+    // Like Codex app-server, the default model need not come first.
+    const codexModels = [
+      {
+        model: 'gpt-fast',
+        displayName: 'Fast',
+        description: 'Quick',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'high' },
+        ],
+      },
+      { model: 'gpt-default', displayName: 'Default', isDefault: true },
+    ]
+    const claudeModels = [
+      { value: 'default', displayName: 'Default' },
+      {
+        value: 'opus',
+        displayName: 'Opus',
+        description: 'Most capable',
+        supportedEffortLevels: ['low', 'high'],
+      },
+      // Claude Code names some models with brackets.
+      { value: 'sonnet[1m]', displayName: 'Sonnet (1M context)' },
+    ]
+    const agents = {
+      [codex]: { name: 'codex', models: codexModels },
+      [claude]: { name: 'claude', models: claudeModels },
+    } as const
+    const setup = (auth: keyof typeof agents, choices: string[]) => {
+      copyApp(directory)
+      return runSetup({
+        directory,
+        agent: agents[auth],
+        choices: [auth, ...choices],
+      })
+    }
+    const rendered = (result: ReturnType<typeof runSetup>) =>
+      (
+        load(committedWorkflow(result)) as {
+          jobs: { upgrade: { with: Record<string, unknown> } }
+        }
+      ).jobs.upgrade.with
+    const effortQuestion = 'Which reasoning effort should the upgrade use?'
+
+    it.each([
+      [
+        'a Codex model and effort',
+        codex,
+        ['gpt-fast', 'high'],
+        'gpt-fast',
+        'high',
+      ],
+      ['the default Codex model', codex, ['gpt-default'], '', ''],
+      [
+        'a Claude Code model at its default effort',
+        claude,
+        ['opus', 'default'],
+        'opus',
+        '',
+      ],
+      [
+        'a Claude Code model named with brackets',
+        claude,
+        ['sonnet[1m]'],
+        'sonnet[1m]',
+        '',
+      ],
+    ] as const)('renders %s', (_, auth, choices, model, effort) => {
+      const result = setup(auth, [...choices, 'publish'])
+      expect(result.status).toBe(0)
+      const displayName = auth === codex ? 'Codex' : 'Claude Code'
+      expect(result.output).toContain(
+        `Which ${displayName} model should run the upgrade?`
+      )
+      expect(result.output).not.toContain(defaultModelInfo(displayName))
+      // The model menu highlights the agent CLI default.
+      expect(result.menus[1]).toEqual(
+        auth === codex
+          ? {
+              values: { 'gpt-fast': 'Fast — Quick', 'gpt-default': 'Default' },
+              defaultValue: 1,
+            }
+          : {
+              values: {
+                default: 'Default',
+                opus: 'Opus — Most capable',
+                'sonnet[1m]': 'Sonnet (1M context)',
+              },
+              defaultValue: 0,
+            }
+      )
+      if (choices.length > 1) {
+        expect(result.output).toContain(effortQuestion)
+        expect(result.menus[2]).toEqual({
+          values: { default: 'Model default', low: 'low', high: 'high' },
+          defaultValue: 0,
+        })
+      } else {
+        // A model without efforts skips the question.
+        expect(result.output).not.toContain(effortQuestion)
+      }
+      expect(rendered(result)).toMatchObject({
+        'agent-auth': auth,
+        model,
+        effort,
+      })
+    })
+
+    it('goes back one question with Escape', () => {
+      const result = setup(codex, [
+        // Back from the model to the agent.
+        '__cancel__',
+        codex,
+        'gpt-fast',
+        // Back from the effort to the model.
+        '__cancel__',
+        'gpt-fast',
+        'low',
+        'publish',
+      ])
+      expect(result.status).toBe(0)
+      expect(
+        result.menus
+          .slice(0, 7)
+          .map(({ values, defaultValue }) => [
+            Object.keys(values)[0],
+            defaultValue,
+          ])
+      ).toEqual([
+        [codex, 0],
+        ['gpt-fast', 1],
+        // Each question highlights the previous answer.
+        [codex, 0],
+        ['gpt-fast', 1],
+        ['default', 0],
+        ['gpt-fast', 0],
+        ['default', 0],
+      ])
+      expect(rendered(result)).toMatchObject({
+        model: 'gpt-fast',
+        effort: 'low',
+      })
+    })
+
+    it.each([
+      // Discovery runs for every installed CLI, not only the chosen one.
+      ['codex', claude],
+      ['claude', codex],
+    ] as const)(
+      'reads the %s models a fresh install offers before the agent menu',
+      (name, chosen) => {
+        copyApp(directory)
+        const result = runSetup({
+          directory,
+          agent: name === 'codex' ? agents[codex] : agents[claude],
+          choices: [chosen, 'publish'],
+        })
+        expect(result.status).toBe(0)
+        expect(result.agentRuns).toHaveLength(1)
+        const [{ name: ran, env }] = result.agentRuns
+        expect(ran).toBe(name)
+        // None of this user's agent configuration reaches the CLI.
+        const home = env.HOME!
+        expect(home).toBeDefined()
+        expect(home).not.toBe(process.env.HOME)
+        expect(env).toMatchObject({
+          USERPROFILE: home,
+          CODEX_HOME: join(home, 'codex'),
+          CLAUDE_CONFIG_DIR: join(home, 'claude'),
+          XDG_CONFIG_HOME: join(home, 'config'),
+        })
+        expect(env).not.toHaveProperty('UPGRADE_SETUP_TEST')
+        expect(env).not.toHaveProperty('NEXT_TELEMETRY_DISABLED')
+        // Setup removes the fresh home once the questions are answered.
+        expect(existsSync(home)).toBe(false)
+      }
+    )
+
+    it('makes no changes when model discovery is interrupted', () => {
+      copyApp(directory)
+      const result = runSetup({
+        directory,
+        agent: { ...agents[codex], interrupt: true },
+        choices: [codex, 'publish'],
+      })
+      expect(result.status).toBe(0)
+      expect(result.agentRuns).toHaveLength(1)
+      expect(result.menus).toEqual([])
+      expect(result.output).not.toContain(defaultModelInfo('Codex'))
+      expect(result.requests.every(({ body }) => body === null)).toBe(true)
+    })
+
+    it('makes no changes when the model question is interrupted', () => {
+      const result = setup(codex, ['__interrupt__'])
+      expect(result.status).toBe(0)
+      expect(result.output).not.toContain('Open a setup pull request')
+      expect(result.requests.every(({ body }) => body === null)).toBe(true)
     })
   })
 
