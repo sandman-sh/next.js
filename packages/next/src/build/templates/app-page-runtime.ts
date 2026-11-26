@@ -2472,7 +2472,7 @@ export function createAppPageEntrypoint({
               throw new Error(
                 `This route has no static shell to display while navigations are paused. Next.js has released the pause.\n\n` +
                   `Reload the page without pausing navigations in the Navigation Inspector. In a Playwright test, open the route outside \`instant()\` from @next/playwright. Check the terminal or browser for details about what blocked the route.\n\n` +
-                  `Learn more: https://nextjs.org/docs/app/guides/instant-navigation`
+                  `Learn more: https://nextjs.org/docs/app/guides/instant-navigation#fixing-a-navigation-that-blocks`
               )
             }
 
@@ -2480,8 +2480,8 @@ export function createAppPageEntrypoint({
               `<!DOCTYPE html><html><head><meta charSet="utf-8"/></head><body>` +
               `<script>document.cookie="${NEXT_INSTANT_TEST_COOKIE}=; Path=/; Max-Age=0"</script>` +
               `<p>This route has no static shell to display while navigations are paused. Next.js has released the pause. Reload the page to continue.</p>` +
-              `<p>For help finding what blocks the route, see the ` +
-              `<a href="https://nextjs.org/docs/app/guides/instant-navigation">Instant Navigation docs</a>.</p>` +
+              `<p>For help finding what blocks the route, see ` +
+              `<a href="https://nextjs.org/docs/app/guides/instant-navigation#fixing-a-navigation-that-blocks">Fixing a navigation that blocks</a>.</p>` +
               `</body></html>`
 
             return sendRenderResult({

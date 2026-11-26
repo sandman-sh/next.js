@@ -1179,7 +1179,7 @@ describe('instant-navigation-testing-api', () => {
 
        Reload the page without pausing navigations in the Navigation Inspector. In a Playwright test, open the route outside \`instant()\` from @next/playwright. Check the terminal or browser for details about what blocked the route.
 
-       Learn more: https://nextjs.org/docs/app/guides/instant-navigation",
+       Learn more: https://nextjs.org/docs/app/guides/instant-navigation#fixing-a-navigation-that-blocks",
          "environmentLabel": null,
          "label": "Runtime Error",
          "source": null,
