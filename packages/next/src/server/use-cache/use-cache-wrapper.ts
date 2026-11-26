@@ -1042,7 +1042,16 @@ function propagateCacheLifeAndTagsToRevalidateStore(
     revalidateStore.stale = metadata.stale
   }
 
-  if (revalidateStore.revalidate > metadata.revalidate) {
+  if (
+    metadata.revalidate >= 0 &&
+    revalidateStore.revalidate > metadata.revalidate
+  ) {
+    // A negative `revalidate` (e.g. `-1`) is a "serve stale, regenerate in
+    // the background" sentinel from a stale cache-handler entry, not a valid
+    // cache life. Propagating it would make SSG throw
+    // `Invalid revalidate configuration provided: -1 < 1`. The join paths
+    // avoid serving such entries to prerender consumers; as a backstop,
+    // never lower the store with a sentinel here.
     revalidateStore.revalidate = metadata.revalidate
   }
 
@@ -3335,6 +3344,24 @@ export async function cache(
             // not run before the write settles.
             const metadata = await sharedCacheResult.entry.pendingCompletion
 
+            // A prerender consumer that called the handler itself would treat
+            // a stale sentinel entry (`revalidate: -1`, "serve stale,
+            // regenerate in background") as a miss and regenerate in the
+            // foreground. Don't serve it via join; fall through to the leader
+            // path below to regenerate instead. Otherwise the `-1` propagates
+            // into the revalidate store and SSG throws
+            // `Invalid revalidate configuration provided: -1 < 1`.
+            if (
+              willConsumerServerCache(workUnitStore) &&
+              metadata.revalidate < 0
+            ) {
+              debug?.(
+                logPrefix,
+                'cross-request entry is stale sentinel, regenerating instead of joining',
+                cacheHandlerKey
+              )
+              cacheSignal?.endRead()
+            } else {
             // Ensure known root param names are up-to-date before verifying the
             // key, since the leader's save path may not have updated them yet
             // at this point.
@@ -3407,6 +3434,7 @@ export async function cache(
             // a fork from the same SharedCacheEntry.
             resolvableSharedCacheResult.resolve(sharedCacheResult)
             break
+            } // end stale-sentinel else: fresh entries fork above; stale ones fell through to leader path
           } else {
             // prerender-dynamic — same root param check before hanging
             const updatedRootParamNames = knownRootParamsByFunctionId.get(id)
