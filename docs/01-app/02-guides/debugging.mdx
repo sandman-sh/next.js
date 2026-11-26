@@ -22,7 +22,15 @@ Create a file named `.vscode/launch.json` at the root of your project with the f
       "name": "Next.js: debug server-side",
       "type": "node-terminal",
       "request": "launch",
-      "command": "npm run dev -- --inspect"
+      "command": "npm run dev -- --inspect",
+      "sourceMaps": true,
+      "sourceMapPathOverrides": {
+        "turbopack:///[project]/*": "${workspaceFolder}/*",
+        "turbopack://[project]/*": "${workspaceFolder}/*",
+        "/turbopack/[project]/*": "${workspaceFolder}/*",
+        "webpack://_N_E/*": "${workspaceFolder}/*",
+        "webpack-internal:///(rsc)/./*": "${workspaceFolder}/*"
+      }
     },
     {
       "name": "Next.js: debug client-side",
@@ -71,6 +79,8 @@ In the "Next.js: debug full stack" configuration, `serverReadyAction.action` spe
 If you're [changing the port number](/docs/pages/api-reference/cli/next#next-dev-options) your application starts on, replace the `3000` in `http://localhost:3000` with the port you're using instead.
 
 If you're running Next.js from a directory other than root (for example, if you're using Turborepo) then you need to add `cwd` to the server-side and full stack debugging tasks. For example, `"cwd": "${workspaceFolder}/apps/web"`.
+
+> **Breakpoints not binding (hollow grey breakpoints)?** Server code is served from in-memory source maps under virtual URLs (`turbopack://[project]/...` with Turbopack, `webpack://_N_E/...` or `webpack-internal:///(rsc)/...` with webpack), which VS Code can't map to disk without the `sourceMapPathOverrides` above. If breakpoints still don't bind, open VS Code's **Loaded Scripts** view to see the exact URL of your file and add a matching override (use `${workspaceFolder}`, not `${webRoot}`, which `node-terminal` doesn't set). In a monorepo, combine this with the `cwd` setting above. If the debugger never attaches, check the terminal for the inspector port — the router server listens on `9230`, so attach with `{ "type": "node", "request": "attach", "port": 9230 }` as a fallback.
 
 Now go to the Debug panel (`Ctrl+Shift+D` on Windows/Linux, `⇧+⌘+D` on macOS), select a launch configuration, then press `F5` or select **Debug: Start Debugging** from the Command Palette to start your debugging session.
 
