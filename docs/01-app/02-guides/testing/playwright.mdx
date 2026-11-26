@@ -307,11 +307,11 @@ Registering a handler with [`page.route()`](https://playwright.dev/docs/api/clas
 `next dev` cannot tell that request from a hard refresh. It [bypasses server caches](/docs/messages/cache-bypass-in-dev) for it and skips its validation, so the route renders in the test without the errors it would normally report.
 
 - To check what is visible before dynamic content arrives, use `instant()`. It does not intercept requests.
-- If a test needs request interception, for example to simulate a failed request, also load the route in a browser context that registers no route handler. Validation errors then appear in the `next dev` terminal and in the browser console.
+- If a test needs request interception, for example to simulate a failed request, check the route with the dev server's [`check_route`](/docs/app/guides/debugging-with-agents#find-the-error) tool. It requests and validates the route itself, so it reports the same errors however a browser loaded the page.
 
 ### Limitations
 
-- A [blocking route](/docs/messages/blocking-route) has no static shell to show. Loading one inside `instant()` fails with a message that the route is blocking, without the cause. In `next dev`, load the route outside `instant()` to see which read blocks it: the error appears in the terminal and in the browser console.
+- A [blocking route](/docs/messages/blocking-route) has no static shell to show. Loading one inside `instant()` fails with a message that the route is blocking, without the cause. In `next dev`, call [`check_route`](/docs/app/guides/debugging-with-agents#find-the-error) for the route to see which read blocks it.
 - These tests assume a warm cache and check which UI can render before dynamic server content arrives. They do not measure cold-cache loading time or prefetch latency.
 - The pause applies to the browser context. Nested or concurrent `instant()` calls in the same context throw an error. Use separate contexts for concurrent tests.
 - The pause holds back dynamic server content but allows hydration to continue. Client Components that do not need that content may already be visible when assertions run.
