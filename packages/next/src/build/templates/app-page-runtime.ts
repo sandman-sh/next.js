@@ -2470,8 +2470,8 @@ export function createAppPageEntrypoint({
             // Server Error" page.
             if (routeModule.isDev === true) {
               throw new Error(
-                `This is a blocking route, so it has no static shell to show while navigations are paused. The pause, set by \`instant()\` from @next/playwright or by the Navigation Inspector, has been released. Reload the page to load the route.\n\n` +
-                  `To see which data access blocks the route, load it without the pause: Next.js reports it in the terminal and in the browser.\n\n` +
+                `This route has no static shell to display while navigations are paused. Next.js has released the pause.\n\n` +
+                  `Reload the page without pausing navigations in the Navigation Inspector. In a Playwright test, open the route outside \`instant()\` from @next/playwright. Check the terminal or browser for details about what blocked the route.\n\n` +
                   `Learn more: https://nextjs.org/docs/app/guides/instant-navigation`
               )
             }
@@ -2479,8 +2479,8 @@ export function createAppPageEntrypoint({
             const recoveryHtml =
               `<!DOCTYPE html><html><head><meta charSet="utf-8"/></head><body>` +
               `<script>document.cookie="${NEXT_INSTANT_TEST_COOKIE}=; Path=/; Max-Age=0"</script>` +
-              `<p>This is a blocking route, so it has no static shell to show while navigations are paused. The pause has been released. Reload the page to load the route.</p>` +
-              `<p>To find out why the route is blocking, see the ` +
+              `<p>This route has no static shell to display while navigations are paused. Next.js has released the pause. Reload the page to continue.</p>` +
+              `<p>For help finding what blocks the route, see the ` +
               `<a href="https://nextjs.org/docs/app/guides/instant-navigation">Instant Navigation docs</a>.</p>` +
               `</body></html>`
 
