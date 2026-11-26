@@ -311,7 +311,7 @@ Registering a handler with [`page.route()`](https://playwright.dev/docs/api/clas
 
 ### Limitations
 
-- A [blocking route](/docs/messages/blocking-route) has no static shell to show. Loading one inside `instant()` fails with an error that says so. It does not say which data access blocks the route. In `next dev`, load the route outside `instant()` to see that: the error appears in the terminal and in the browser console.
+- A route with no static shell cannot be shown while navigations are paused, for example one that reads uncached data outside `<Suspense>` or exports `instant = false`. Loading it inside `instant()` fails with an error that says so, without naming the data access. In `next dev`, load the route outside `instant()` and [Instant Navigation validation](/docs/messages/instant-navigation-validation) reports it. See [Fixing a navigation that blocks](/docs/app/guides/instant-navigation#fixing-a-navigation-that-blocks).
 - These tests assume a warm cache and check which UI can render before dynamic server content arrives. They do not measure cold-cache loading time or prefetch latency.
 - The pause applies to the browser context. Nested or concurrent `instant()` calls in the same context throw an error. Use separate contexts for concurrent tests.
 - The pause holds back dynamic server content but allows hydration to continue. Client Components that do not need that content may already be visible when assertions run.
