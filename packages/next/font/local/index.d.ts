@@ -1,1 +1,1 @@
-export { default } from 'next/dist/compiled/@next/font/dist/local'
+export { default } from '../../dist/compiled/@next/font/dist/local.js'

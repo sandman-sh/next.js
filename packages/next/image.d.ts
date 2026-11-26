@@ -1,3 +1,3 @@
-import Image from './dist/shared/lib/image-external'
-export * from './dist/shared/lib/image-external'
+import Image from './dist/shared/lib/image-external.js'
+export * from './dist/shared/lib/image-external.js'
 export default Image

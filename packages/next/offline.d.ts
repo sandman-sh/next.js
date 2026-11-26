@@ -1,1 +1,1 @@
-export { useOffline } from './dist/client/components/use-offline'
+export { useOffline } from './dist/client/components/use-offline.js'

@@ -1,22 +1,22 @@
-export { unstable_cache } from 'next/dist/server/web/spec-extension/unstable-cache'
+export { unstable_cache } from './dist/server/web/spec-extension/unstable-cache.js'
 
 export type {
   CacheHandler,
   CacheEntry,
-} from './dist/server/lib/cache-handlers/types'
+} from './dist/server/lib/cache-handlers/types.js'
 
 export {
   revalidatePath,
   revalidateTag,
   updateTag,
   refresh,
-} from 'next/dist/server/web/spec-extension/revalidate'
+} from './dist/server/web/spec-extension/revalidate.js'
 
-export { unstable_noStore } from 'next/dist/server/web/spec-extension/unstable-no-store'
+export { unstable_noStore } from './dist/server/web/spec-extension/unstable-no-store.js'
 
-export { io } from 'next/dist/server/request/io'
+export { io } from './dist/server/request/io.js'
 
-import { cacheTag } from 'next/dist/server/use-cache/cache-tag'
+import { cacheTag } from './dist/server/use-cache/cache-tag.js'
 
 export { cacheTag }
 
@@ -164,5 +164,5 @@ export function cacheLife(profile: {
 export const unstable_cacheLife: typeof cacheLife
 export const unstable_cacheTag: typeof cacheTag
 
-export { navigation } from 'next/dist/server/request/cache-stages'
-export { prefetch } from 'next/dist/server/request/cache-stages'
+export { navigation } from './dist/server/request/cache-stages.js'
+export { prefetch } from './dist/server/request/cache-stages.js'

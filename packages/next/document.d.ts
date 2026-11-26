@@ -1,3 +1,3 @@
-import Document from './dist/pages/_document'
-export * from './dist/pages/_document'
+import Document from './dist/pages/_document.js'
+export * from './dist/pages/_document.js'
 export default Document

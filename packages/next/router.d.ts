@@ -1,3 +1,3 @@
-import Router from './dist/client/router'
-export * from './dist/client/router'
+import Router from './dist/client/router.js'
+export * from './dist/client/router.js'
 export default Router

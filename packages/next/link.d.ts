@@ -1,3 +1,3 @@
-import Link from './dist/client/link'
-export * from './dist/client/link'
+import Link from './dist/client/link.js'
+export * from './dist/client/link.js'
 export default Link
