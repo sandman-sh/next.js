@@ -20,6 +20,7 @@ import {
   isHTTPAccessFallbackError,
 } from './http-access-fallback'
 import { MissingSlotContext } from '../../../shared/lib/app-router-context.shared-runtime'
+import { SearchParamsContext } from '../../../shared/lib/hooks-client-context.shared-runtime'
 
 interface HTTPAccessFallbackBoundaryProps {
   notFound?: React.ReactNode
@@ -163,12 +164,21 @@ export function HTTPAccessFallbackBoundary({
   // (where these error can occur), we will get the correct pathname.
   const pathname = useUntrackedPathname()
   const missingSlots = useContext(MissingSlotContext)
+  // Read the raw context (not useSearchParams()) so this stays out of the
+  // dynamic bailout. The provider value already changes per navigation, so a
+  // search-only navigation (same pathname, different query) re-renders here
+  // and resets a triggered 404 via getDerivedStateFromProps. Without the
+  // query in the key, `/about?q=404` -> `/about` keeps showing not-found.
+  const searchParams = useContext(SearchParamsContext)
+  const query = searchParams?.toString()
+  const resetKey =
+    pathname === null ? null : query ? `${pathname}?${query}` : pathname
   const hasErrorFallback = !!(notFound || forbidden || unauthorized)
 
   if (hasErrorFallback) {
     return (
       <HTTPAccessFallbackErrorBoundary
-        pathname={pathname}
+        pathname={resetKey}
         notFound={notFound}
         forbidden={forbidden}
         unauthorized={unauthorized}
