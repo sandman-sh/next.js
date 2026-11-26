@@ -108,7 +108,17 @@ function getParametrizedRoute(
     if (markerMatch && paramMatches && paramMatches[2]) {
       const { key, optional, repeat } = parseMatchedParameter(paramMatches[2])
       groups[key] = { pos: groupIndex++, repeat, optional }
-      segments.push(`/${escapeStringRegexp(markerMatch)}([^/]+?)`)
+      // Repeat params can span `/`, so they need `(.+?)` like the
+      // non-intercepted branch below. A single-segment `([^/]+?)` here could
+      // never match a multi-segment intercepted catch-all.
+      const markerPattern = escapeStringRegexp(markerMatch)
+      segments.push(
+        repeat
+          ? optional
+            ? `(?:/${markerPattern}(.+?))?`
+            : `/${markerPattern}(.+?)`
+          : `/${markerPattern}([^/]+?)`
+      )
     } else if (paramMatches && paramMatches[2]) {
       const { key, repeat, optional } = parseMatchedParameter(paramMatches[2])
       groups[key] = { pos: groupIndex++, repeat, optional }

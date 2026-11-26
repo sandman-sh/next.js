@@ -319,6 +319,19 @@ export function prepareDestination(args: {
         break
       }
     }
+
+    // A repeat param glued to an interception marker (e.g. `/(.):id+`)
+    // compiles with an empty prefix, so path-to-regexp joins array elements
+    // with '' (`(.)doubledouble`). Pre-join arrays so the `/` separators
+    // survive (`(.)double/double`).
+    for (const { name, modifier } of destPathParamKeys) {
+      if (
+        (modifier === '+' || modifier === '*') &&
+        Array.isArray(args.params[name])
+      ) {
+        args.params[name] = (args.params[name] as string[]).join('/')
+      }
+    }
   }
 
   try {
