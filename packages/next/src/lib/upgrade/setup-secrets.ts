@@ -1,4 +1,7 @@
+import * as Log from '../../build/output/log'
 import { bold, cyan, dim, green } from '../picocolors'
+import { chooseOption } from './choose-option'
+import { withHiddenInput } from './secret-input'
 
 export type AgentAuth =
   | 'codex-openai-api-key'
@@ -117,6 +120,128 @@ export function setupSecrets({
   ]
 }
 
+// Walk the user through each secret that is not registered yet. Nothing here
+// fails setup, because the setup pull request already exists.
+export async function registerSecrets({
+  secrets,
+  repo,
+  isRegistered,
+  register,
+  openUrl,
+}: {
+  secrets: Secret[]
+  repo: string
+  isRegistered: (name: string) => boolean
+  // Stores the value and returns whether GitHub accepted it.
+  register: (name: string, value: string) => boolean
+  openUrl: (url: string) => void
+}): Promise<SecretResult[]> {
+  const results: SecretResult[] = []
+  // Esc in any menu leaves the remaining secrets for later.
+  let stopped = false
+  for (const [index, secret] of secrets.entries()) {
+    let registered = isRegistered(secret.name)
+    if (!stopped) {
+      Log.bootstrap('')
+      Log.bootstrap(
+        `  ${bold(`Step ${index + 1} of ${secrets.length}: ${secret.title}`)}`
+      )
+      if (registered) {
+        Log.bootstrap(
+          `  ${green('✓')} ${secret.name} is already registered in ${repo}`
+        )
+      } else {
+        for (const line of secret.description) {
+          Log.bootstrap(`  ${line}`)
+        }
+        const outcome = await registerSecret(secret, repo, register, openUrl)
+        registered = outcome === true
+        stopped = outcome === null
+      }
+    }
+    results.push({ secret, registered })
+  }
+  return results
+}
+
+// Resolves to null when the user leaves the menu with Esc or Ctrl+C.
+async function registerSecret(
+  secret: Secret,
+  repo: string,
+  register: (name: string, value: string) => boolean,
+  openUrl: (url: string) => void
+): Promise<boolean | null> {
+  let choice = await chooseOption(
+    `${secret.name} is not registered in ${repo}.`,
+    {
+      open: secret.createUrl
+        ? 'Open the page to create one'
+        : 'Show how to create one',
+      paste: 'Paste one I already have',
+      later: 'Do it later',
+    },
+    0,
+    true
+  )
+  while (choice === 'open' || choice === 'paste' || choice === 'again') {
+    const opening = choice === 'open'
+    // Typing stays hidden from here until GitHub has answered.
+    const outcome = await withHiddenInput<
+      { problem: string } | { registered: boolean } | null
+    >(async (read) => {
+      // A blank line sets each block apart from the menu above it.
+      Log.bootstrap('')
+      if (opening) {
+        // Print before opening, which can take a while without a browser.
+        if (secret.createUrl) {
+          Log.bootstrap(`  ${dim('Opening')} ${secret.createUrl}`)
+          Log.bootstrap('')
+        }
+        for (const line of secret.createSteps) {
+          Log.bootstrap(`  ${line}`)
+        }
+        Log.bootstrap('')
+        if (secret.createUrl) {
+          openUrl(secret.createUrl)
+        }
+      }
+      Log.bootstrap(`  ${dim('Paste it here. Input is hidden.')}`)
+      const value = (await read(secret.label))?.trim()
+      if (value === undefined) {
+        return null
+      }
+      const problem = value
+        ? (secret.problem?.(value) ?? null)
+        : 'Nothing was pasted.'
+      if (problem) {
+        return { problem }
+      }
+      Log.bootstrap('')
+      Log.bootstrap(`  ${dim(`Registering ${secret.name}...`)}`)
+      return { registered: register(secret.name, value) }
+    })
+    if (outcome === null) {
+      return null
+    }
+    if ('registered' in outcome) {
+      Log.bootstrap(
+        outcome.registered
+          ? `  ${green('✓')} Registered ${secret.name} in ${repo}`
+          : `  Could not register ${secret.name}. Check that the GitHub CLI can manage secrets in ${repo}.`
+      )
+      return outcome.registered
+    }
+    choice = await chooseOption(
+      outcome.problem,
+      { again: 'Paste again', later: 'Do it later' },
+      0,
+      true
+    )
+  }
+  return choice === 'later' ? false : null
+}
+
+// The closing list: what is done, then what is left, in order.
 export function remainingSteps({
   results,
   repo,
@@ -146,7 +271,8 @@ export function remainingSteps({
       '',
       ...(secret.createUrl
         ? [`     ${dim('Create one:')} ${secret.createUrl}`]
-        : secret.createSteps.map((line) => `     ${line}`)),
+        : []),
+      ...secret.createSteps.map((line) => `     ${line}`),
       // The host keeps the command on GitHub.com when the GitHub CLI defaults
       // to another host.
       `     ${cyan(`gh secret set ${secret.name} --repo github.com/${repo}`)}`,

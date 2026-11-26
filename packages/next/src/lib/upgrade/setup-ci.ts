@@ -21,7 +21,12 @@ import { bold, cyan } from '../picocolors'
 import { chooseOption } from './choose-option'
 import { getHarnessDisplayName } from './harness'
 import { getHarnessModels, type UpgradeModel } from './model-discovery'
-import { remainingSteps, setupSecrets, type AgentAuth } from './setup-secrets'
+import {
+  registerSecrets,
+  remainingSteps,
+  setupSecrets,
+  type AgentAuth,
+} from './setup-secrets'
 
 const WORKFLOW = '.github/workflows/next-upgrade.yml'
 const TEMPLATE = '.github/actions/next-upgrade/workflow.template.yml'
@@ -1065,13 +1070,60 @@ export async function setupUpgradeCI({
         '\n'
       )
     )
-    // The next steps name each secret with a command to register it.
-    const results = setupSecrets({
+    const results = await registerSecrets({
+      secrets: setupSecrets({
+        repo,
+        auth,
+        agentSecret: SECRET,
+        publishSecret: PUBLISH_SECRET,
+      }),
       repo,
-      auth,
-      agentSecret: SECRET,
-      publishSecret: PUBLISH_SECRET,
-    }).map((secret) => ({ secret, registered: false }))
+      isRegistered(name) {
+        try {
+          // A failed lookup counts as not registered.
+          return Boolean(
+            api(
+              `repos/${repo}/actions/secrets/${name}`,
+              'Could not look up the secret.',
+              { missing: true }
+            )
+          )
+        } catch {
+          return false
+        }
+      },
+      register(name, value) {
+        // The value travels on standard input only, never in an argument.
+        const result = run({
+          command: 'gh',
+          args: ['secret', 'set', name, '--repo', `github.com/${repo}`],
+          cwd: root,
+          env,
+          input: value,
+        })
+        return result.status === 0
+      },
+      openUrl(page) {
+        const [command, ...args] =
+          process.platform === 'darwin'
+            ? ['open']
+            : process.platform === 'win32'
+              ? ['rundll32', 'url.dll,FileProtocolHandler']
+              : ['xdg-open']
+        // Do not wait for the browser, and ignore a machine without one: the
+        // URL is printed as well.
+        const file = findCommand(command, root, env)
+        if (!file) return
+        spawn(file, [...args, page], {
+          cwd: root,
+          env,
+          stdio: 'ignore',
+          detached: true,
+        })
+          .on('error', () => {})
+          .unref()
+      },
+    })
     Log.bootstrap(remainingSteps({ results, repo, url }))
     return { status: 'draft_created', url }
   } catch (error) {

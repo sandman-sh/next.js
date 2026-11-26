@@ -48,7 +48,8 @@ Module._load = function (request, parent, isMain) {
   if (parent?.filename.endsWith('choose-option.js') && request.endsWith('/cli-select')) {
     return async ({ values, defaultValue }) => {
       fs.appendFileSync(config.requests, JSON.stringify({ menu: { values, defaultValue } }) + '\\n')
-      const selected = choices.shift()
+      // Tests that do not script the secret menus leave both for later.
+      const selected = choices.shift() ?? (values.later ? 'Do it later' : undefined)
       // Like pressing Escape in the menu.
       if (selected === '__cancel__') throw undefined
       // Like pressing Ctrl+C in the menu.
@@ -61,12 +62,30 @@ Module._load = function (request, parent, isMain) {
       return { id: key }
     }
   }
+  // Pasted secrets come from the test instead of the terminal.
+  if (parent?.filename.endsWith('setup-secrets.js') && request.endsWith('/secret-input')) {
+    const pasted = [...(config.pasted ?? [])]
+    return { withHiddenInput: (task) => task(async () => pasted.length ? pasted.shift() : null) }
+  }
   if (!parent?.filename.endsWith('setup-ci.js')) return actual
   if (!request.endsWith('/cross-spawn')) return actual
-  return {
+  // Setup opens pages without waiting, through the asynchronous form.
+  const spawn = (command, args) => {
+    if (!['open', 'xdg-open', 'rundll32'].includes(require('node:path').basename(command))) throw new Error('Unexpected command ' + command)
+    fs.appendFileSync(config.requests, JSON.stringify({ opened: args.at(-1) }) + '\\n')
+    const child = { on: () => child, unref() {} }
+    return child
+  }
+  return Object.assign(spawn, {
     ...actual,
     sync(command, args, options) {
       if (require('node:path').basename(command) !== 'gh') return actual.sync(command, args, options)
+      if (args[0] === 'secret') {
+        fs.appendFileSync(config.requests, JSON.stringify({ secret: { args, input: options.input } }) + '\\n')
+        return config.secretFailure
+          ? { status: 1, stdout: '', stderr: 'HTTP 403' }
+          : { status: 0, stdout: '', stderr: '' }
+      }
       const endpoint = args[3].startsWith('/') ? args[3].slice(1) : args[3]
       const body = options.input ? JSON.parse(options.input) : null
       fs.appendFileSync(config.requests, JSON.stringify({ endpoint, body }) + '\\n')
@@ -84,6 +103,11 @@ Module._load = function (request, parent, isMain) {
       }
       if (config.annotatedTag && endpoint === source + '/git/tags/' + config.tagObjectSha) {
         return response({ object: { type: 'commit', sha: config.publicSha } })
+      }
+      if (endpoint.startsWith(consumer + '/actions/secrets/')) {
+        if (config.secretLookupFailure) return { status: 1, stdout: '', stderr: 'gh: Forbidden (HTTP 403)' }
+        const name = endpoint.slice((consumer + '/actions/secrets/').length)
+        return (config.registeredSecrets ?? []).includes(name) ? response({ name }) : missing()
       }
       if (endpoint.startsWith(consumer + '/contents/')) {
         return config.existingWorkflow ? response({ type: 'file' }) : missing()
@@ -128,7 +152,7 @@ Module._load = function (request, parent, isMain) {
       }
       throw new Error('Unexpected GitHub request ' + endpoint)
     },
-  }
+  })
 }
 `
 
@@ -144,6 +168,10 @@ function runSetup({
   tagMissing = false,
   annotatedTag = false,
   nonInteractive = false,
+  registeredSecrets = [],
+  pasted = [],
+  secretFailure = false,
+  secretLookupFailure = false,
   agent,
   cwd = directory,
   path = [],
@@ -159,6 +187,10 @@ function runSetup({
   tagMissing?: boolean
   annotatedTag?: boolean
   nonInteractive?: boolean
+  registeredSecrets?: string[]
+  pasted?: string[]
+  secretFailure?: boolean
+  secretLookupFailure?: boolean
   agent?: FakeAgent
   cwd?: string
   // PATH entries searched before the stand-in commands.
@@ -191,6 +223,10 @@ function runSetup({
       tagMissing,
       annotatedTag,
       nonInteractive,
+      registeredSecrets,
+      pasted,
+      secretFailure,
+      secretLookupFailure,
       template: readFileSync(join(repoRoot, templatePath), 'utf8'),
     })
   )
@@ -218,6 +254,8 @@ function runSetup({
     status: result.status,
     output: result.stdout + result.stderr,
     requests: entries.filter((entry) => entry.endpoint !== undefined),
+    secrets: entries.flatMap((entry) => (entry.secret ? [entry.secret] : [])),
+    opened: entries.flatMap((entry) => (entry.opened ? [entry.opened] : [])),
     menus: entries.flatMap((entry) => (entry.menu ? [entry.menu] : [])),
     // The environment each agent CLI started with.
     agentRuns: readAgentRuns(directory),
@@ -256,8 +294,8 @@ function agentPath(directory: string, agent?: FakeAgent) {
   mkdirSync(bin)
   if (!gitPath) throw new Error('Could not find Git on PATH.')
   symlinkSync(gitPath, join(bin, 'git'))
-  // The hook answers for it, but setup only runs commands it finds.
-  for (const name of ['gh']) {
+  // The hook answers for these, but setup only runs commands it finds.
+  for (const name of ['gh', 'open', 'xdg-open']) {
     writeFileSync(join(bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   }
   rmSync(join(directory, 'agent-runs.jsonl'), { force: true })
@@ -993,48 +1031,263 @@ describe('next upgrade --ci', () => {
     expect(result.requests.every(({ body }) => body === null)).toBe(true)
   })
 
+  describe('secret registration', () => {
+    const agentKey = 'sk-0123456789'
+    const publishToken = 'github_pat_0123456789'
+    const setSecret = (name: string, input: string) => ({
+      // The value is never an argument.
+      args: ['secret', 'set', name, '--repo', 'github.com/example/consumer'],
+      input,
+    })
+    const setup = (options: Partial<Parameters<typeof runSetup>[0]>) => {
+      copyApp(directory)
+      return runSetup({
+        directory,
+        ...options,
+        choices: [
+          'codex-openai-api-key',
+          'publish',
+          ...(options.choices ?? []),
+        ],
+      })
+    }
+
+    it('registers both pasted secrets and leaves only the merge', () => {
+      const result = setup({
+        choices: ['paste', 'paste'],
+        pasted: [agentKey, publishToken],
+      })
+      expect(result.status).toBe(0)
+      expect(result.secrets).toEqual([
+        setSecret('NEXT_UPGRADE_AGENT_CREDENTIAL', agentKey),
+        setSecret('NEXT_UPGRADE_PUBLISH_TOKEN', publishToken),
+      ])
+      expect(result.output).toContain('One step left')
+      // A single step has no number.
+      expect(result.output).toContain('Merge the setup pull request')
+      expect(result.output).not.toContain('1. Merge the setup pull request')
+      expect(result.output).not.toContain('gh secret set')
+      // The values appear nowhere else.
+      for (const value of [agentKey, publishToken]) {
+        expect(result.output).not.toContain(value)
+        expect(JSON.stringify(result.requests)).not.toContain(value)
+      }
+    })
+
+    it('skips secrets that are already registered', () => {
+      const result = setup({
+        registeredSecrets: [
+          'NEXT_UPGRADE_AGENT_CREDENTIAL',
+          'NEXT_UPGRADE_PUBLISH_TOKEN',
+        ],
+      })
+      expect(result.status).toBe(0)
+      expect(result.secrets).toEqual([])
+      expect(result.output.match(/is already registered/g)).toHaveLength(2)
+      expect(result.output).toContain('One step left')
+    })
+
+    it('opens the pre-filled token page and asks again for a token of the wrong kind', () => {
+      const result = setup({
+        registeredSecrets: ['NEXT_UPGRADE_AGENT_CREDENTIAL'],
+        choices: ['open', 'again'],
+        pasted: ['ghp_classic', publishToken],
+      })
+      expect(result.status).toBe(0)
+      expect(result.opened).toHaveLength(1)
+      const page = new URL(result.opened[0])
+      expect(page.origin + page.pathname).toBe(
+        'https://github.com/settings/personal-access-tokens/new'
+      )
+      const permissions = Object.fromEntries(page.searchParams)
+      expect(permissions).toMatchObject({
+        contents: 'write',
+        pull_requests: 'write',
+      })
+      // The workflow commits no workflow files, so the token needs no
+      // Workflows permission.
+      expect(permissions).not.toHaveProperty('workflows')
+      expect(result.output).toContain('This is not a fine-grained token')
+      expect(result.output).not.toContain('ghp_classic')
+      expect(result.secrets).toEqual([
+        setSecret('NEXT_UPGRADE_PUBLISH_TOKEN', publishToken),
+      ])
+    })
+
+    it('offers registration when the lookup fails', () => {
+      const result = setup({
+        secretLookupFailure: true,
+        choices: ['paste', 'paste'],
+        pasted: [agentKey, publishToken],
+      })
+      // A lookup GitHub refuses counts as not registered and never fails setup.
+      expect(result.status).toBe(0)
+      expect(result.secrets).toHaveLength(2)
+      expect(result.output).toContain('One step left')
+    })
+
+    it('still looks up the secrets it does not ask about after Escape', () => {
+      const result = setup({
+        registeredSecrets: ['NEXT_UPGRADE_PUBLISH_TOKEN'],
+        choices: ['__cancel__'],
+      })
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('Finish setup in 2 steps')
+      expect(result.output).toContain('Publication token registered')
+      expect(result.output).not.toContain(
+        'gh secret set NEXT_UPGRADE_PUBLISH_TOKEN'
+      )
+    })
+
+    it('rejects an empty value before registering anything', () => {
+      const result = setup({
+        choices: ['paste', 'later', 'later'],
+        pasted: ['   '],
+      })
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('Nothing was pasted.')
+      expect(result.secrets).toEqual([])
+    })
+
+    it.each([
+      [
+        'a rejected registration',
+        {
+          choices: ['paste', 'later'],
+          pasted: [agentKey],
+          secretFailure: true,
+        },
+      ],
+      ['leaving the menu with Escape', { choices: ['__cancel__'] }],
+      ['doing both later', { choices: ['later', 'later'] }],
+    ])('keeps the step in the closing list after %s', (_, options) => {
+      const result = setup(options)
+      // The pull request exists, so setup still succeeds.
+      expect(result.status).toBe(0)
+      expect(result.output).toContain(setupUrl)
+      expect(result.output).toContain('Finish setup in 3 steps')
+      expect(result.output).toContain(
+        'gh secret set NEXT_UPGRADE_AGENT_CREDENTIAL --repo github.com/example/consumer'
+      )
+      expect(result.output).toContain(
+        'gh secret set NEXT_UPGRADE_PUBLISH_TOKEN --repo github.com/example/consumer'
+      )
+      // The token page cannot fill in the owner or the repository.
+      expect(result.output).toContain('Resource owner: example')
+      expect(result.output).toContain(
+        'Repository access: Only select repositories >'
+      )
+      expect(result.output).toContain('3. Merge the setup pull request')
+      expect(result.output).not.toContain(agentKey)
+    })
+  })
+
   describe('agent credential', () => {
     const credentials = [
       {
         auth: 'codex-openai-api-key',
+        description: 'An OpenAI API key for the hosted Codex agent.',
+        title: 'OpenAI API key',
         steps: ['Create an API key in your OpenAI account and copy it.'],
+        value: 'fixture-openai-key',
       },
       {
         auth: 'claude-anthropic-api-key',
+        description: 'An Anthropic API key for the hosted Claude Code agent.',
+        title: 'Anthropic API key',
         steps: [
           'Create an API key in your Claude Console account and copy it.',
         ],
+        value: 'fixture-anthropic-key',
       },
       {
         auth: 'claude-subscription',
+        description:
+          'A long-lived token for your Claude subscription, used by the hosted',
+        title: 'Claude subscription token',
         steps: [
           'In another terminal, run: claude setup-token',
           'Sign in, then copy the token it prints.',
         ],
+        value: 'fixture-subscription-token',
       },
     ] as const
+    const setup = (auth: string, choices: string[], pasted: string[] = []) => {
+      copyApp(directory)
+      return runSetup({
+        directory,
+        choices: [auth, 'publish', ...choices],
+        pasted,
+        registeredSecrets: ['NEXT_UPGRADE_PUBLISH_TOKEN'],
+      })
+    }
 
     it.each(credentials)(
-      'lists how to create the $auth credential',
-      ({ auth, steps }) => {
-        copyApp(directory)
-        const result = runSetup({ directory, choices: [auth, 'publish'] })
+      'renders $auth and registers its credential as pasted',
+      ({ auth, description, title, steps, value }) => {
+        const result = setup(auth, ['open'], [value])
         expect(result.status).toBe(0)
         expect(load(committedWorkflow(result))).toMatchObject({
-          jobs: { upgrade: { with: { 'agent-auth': auth } } },
+          jobs: {
+            upgrade: {
+              with: { 'agent-auth': auth },
+              secrets: {
+                'agent-credential': secretExpression(
+                  'NEXT_UPGRADE_AGENT_CREDENTIAL'
+                ),
+              },
+            },
+          },
         })
+        expect(result.output).toContain(`Step 1 of 2: ${title}`)
+        expect(result.output).toContain(description)
+        // Provider pages and value formats can change, so setup opens no page
+        // and accepts any value; the workflow checks an API key itself.
+        const menu = result.menus.find(({ values }) => 'paste' in values)
+        expect(menu.values.open).toBe('Show how to create one')
+        expect(result.opened).toEqual([])
+        for (const step of steps) {
+          expect(result.output).toContain(step)
+        }
+        expect(result.secrets).toEqual([
+          {
+            args: [
+              'secret',
+              'set',
+              'NEXT_UPGRADE_AGENT_CREDENTIAL',
+              '--repo',
+              'github.com/example/consumer',
+            ],
+            input: value,
+          },
+        ])
+        expect(result.output).toContain('One step left')
+        expect(result.output).not.toContain(value)
+      }
+    )
+
+    it.each(credentials)(
+      'lists how to create the $auth credential when it is left for later',
+      ({ auth, steps }) => {
+        const result = setup(auth, ['later'])
+        expect(result.status).toBe(0)
+        expect(result.opened).toEqual([])
+        expect(result.output).toContain('Finish setup in 2 steps')
+        expect(result.output).toContain('1. Add NEXT_UPGRADE_AGENT_CREDENTIAL')
         const closing = result.output.slice(
-          result.output.indexOf('Finish setup in 3 steps')
+          result.output.indexOf('Finish setup in 2 steps')
         )
-        expect(closing).toContain('1. Add NEXT_UPGRADE_AGENT_CREDENTIAL')
         for (const step of steps) {
           expect(closing).toContain(step)
         }
+        expect(closing).not.toContain('Create one:')
         expect(closing).toContain(
           'gh secret set NEXT_UPGRADE_AGENT_CREDENTIAL --repo github.com/example/consumer'
         )
-        expect(closing).toContain('2. Add NEXT_UPGRADE_PUBLISH_TOKEN')
-        expect(closing).toContain('3. Merge the setup pull request')
+        expect(closing).toContain('2. Merge the setup pull request')
+        expect(closing).toContain(
+          'Review and merge it. Upgrades then run every week.'
+        )
       }
     )
   })
